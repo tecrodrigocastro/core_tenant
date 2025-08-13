@@ -1,57 +1,47 @@
 FROM php:8.3-fpm
 
-# Arguments defined in docker-compose.yml
+# Args
 ARG user=wallace
 ARG uid=1000
 
-# Install system dependencies
+# ---- System deps (inclui o que o gd/intl/zip precisam) ----
 RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    libpng-dev \
-    libonig-dev \
-    libxml2-dev \
-    libzip-dev \
-    unzip \
-    gnupg \
-    ca-certificates \
-    lsb-release
+    git curl unzip zip ca-certificates gnupg lsb-release \
+    libpng-dev libjpeg62-turbo-dev libfreetype6-dev libwebp-dev \
+    libxml2-dev libzip-dev zlib1g-dev \
+    libicu-dev g++ \
+ && rm -rf /var/lib/apt/lists/*
 
-# Clear cache
-RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+# ---- Node.js 20 + npm ----
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get update && apt-get install -y nodejs \
+ && npm i -g npm@latest \
+ && rm -rf /var/lib/apt/lists/*
 
+# ---- PHP extensions ----
+# gd precisa ser configurado com suporte a freetype/jpeg/webp
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
+ && docker-php-ext-install -j"$(nproc)" \
+    pdo_mysql mbstring exif pcntl bcmath gd sockets intl zip
 
-# Add Node.js repository and install Node.js & NPM
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    npm install -g npm@latest
-
-# Install PHP extensions
-RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd sockets intl zip
-
-# Get latest Composer
+# ---- Composer ----
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Create system user to run Composer and Artisan Commands
-RUN useradd -G www-data,root -u $uid -d /home/$user $user
-RUN mkdir -p /home/$user/.composer && \
-    chown -R $user:$user /home/$user
-
-# Install redis
+# ---- Redis (PECL) ----
 RUN pecl install -o -f redis \
-    &&  rm -rf /tmp/pear \
-    &&  docker-php-ext-enable redis
+ && docker-php-ext-enable redis \
+ && rm -rf /tmp/pear
 
-# Install Stripe CLI
-RUN curl -s https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public | gpg --dearmor > /usr/share/keyrings/stripe.gpg
-RUN echo "deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main" > /etc/apt/sources.list.d/stripe.list
-RUN apt-get update -y && apt-get install -y stripe
+# ---- Stripe CLI (opcional, como no seu original) ----
+RUN curl -s https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public | gpg --dearmor > /usr/share/keyrings/stripe.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main" > /etc/apt/sources.list.d/stripe.list \
+ && apt-get update && apt-get install -y stripe \
+ && rm -rf /var/lib/apt/lists/*
 
-# Install PHPStan
-RUN composer global require phpstan/phpstan
+# ---- Usuário não-root ----
+RUN useradd -G www-data,root -u $uid -d /home/$user $user \
+ && mkdir -p /home/$user/.composer \
+ && chown -R $user:$user /home/$user
 
-# Set working directory
 WORKDIR /var/www
-
-# Change to non-root user
 USER $user
